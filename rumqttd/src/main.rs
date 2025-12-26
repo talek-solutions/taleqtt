@@ -10,7 +10,7 @@ static RUMQTTD_DEFAULT_CONFIG: &str = include_str!("../rumqttd.toml");
 #[command(version)]
 #[command(name = "rumqttd")]
 #[command(about = "A high performance, lightweight and embeddable MQTT broker written in Rust.")]
-#[command(author = "tekjar <raviteja@bytebeam.io>")]
+#[command(author = "sivanov <stanislav.ivanov9213@gmail.com>")]
 struct CommandLine {
     /// path to config file
     #[arg(short, long)]

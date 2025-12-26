@@ -11,7 +11,7 @@ resolver = "2"
 edition = "2021"
 repository = "https://github.com/bytebeamio/rumqtt"
 license = "Apache-2.0"
-authors = ["tekjar <raviteja@bytebeam.io>"]
+authors = ["sivanov <stanislav.ivanov9213@gmail.com>"]
 
 [profile.dev]
 # producing debug info in builds takes up a lot of space on runner, and we
