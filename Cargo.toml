@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-repository = "https://github.com/bytebeamio/rumqtt"
+repository = "https://github.com/talek-solutions/taleqtt"
 license = "Apache-2.0"
 authors = ["sivanov <stanislav.ivanov9213@gmail.com>"]
 
