@@ -34,7 +34,9 @@ interval = 1
 [cluster]
 name = "cluster"
 cluster_balancer_port = 1884
-    [cluster.nodes]
-    cluster_nodes = 3
-    cluster_node_port_range_start = 1885
-    cluster_node_port_range_end = 1887
+    [[cluster.nodes]]
+    cluster_node_port = 1885
+    [[cluster.nodes]]
+    cluster_node_port = 1886
+    [[cluster.nodes]]
+    cluster_node_port = 1887

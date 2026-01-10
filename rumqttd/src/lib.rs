@@ -32,6 +32,7 @@ pub mod protocol;
 mod router;
 mod segments;
 mod server;
+mod cluster;
 
 pub type ConnectionId = usize;
 pub type RouterId = usize;
@@ -58,7 +59,6 @@ pub struct Config {
     pub v4: Option<HashMap<String, ServerSettings>>,
     pub v5: Option<HashMap<String, ServerSettings>>,
     pub ws: Option<HashMap<String, ServerSettings>>,
-    pub cluster: Option<ClusterSettings>,
     pub console: Option<ConsoleSettings>,
     pub bridge: Option<BridgeConfig>,
     pub prometheus: Option<PrometheusSetting>,
@@ -179,16 +179,6 @@ impl fmt::Debug for ConnectionSettings {
             .field("dynamic_filters", &self.dynamic_filters)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterSettings {
-    /// Id with which this node connects to other nodes of the mesh
-    pub node_id: NodeId,
-    /// Address on which this broker is listening for mesh connections
-    pub listen: String,
-    /// Address of clusters that this node has to initiate connection
-    pub seniors: Vec<(ConnectionId, String)>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
