@@ -1,9 +1,13 @@
+use crate::cluster::replication::ping::PingReplicationMessage;
+use crate::cluster::replication::pong::PongReplicationMessage;
 use crate::{Filter, SegmentConfig, Strategy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::either::Either;
 use x509_parser::nom::HexDisplay;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,44 +48,50 @@ pub struct ExtendedRouterConfig {
     pub next_connection_delay_ms: Option<u64>,
 }
 
+pub enum ClusterNodeMode {
+    MASTER,
+    SLAVE,
+}
+
+pub struct ClusterNode {
+    pub host: Ipv4Addr,
+    pub service_bus_address: Ipv4Addr,
+    pub mode: ClusterNodeMode,
+}
+
+pub struct ClusterConnectionConfig {
+    mode: ClusterNodeMode,
+    port: u16,
+    nodes: Vec<ClusterNode>,
+}
+
 impl Cluster {
-    pub async fn connect(
-        own_port: u16,
-        node_1_host: Ipv4Addr,
-        node_2_host: Ipv4Addr,
-    ) -> Result<(), std::io::Error> {
-        let mut stream_node_1 = TcpStream::connect(node_1_host.to_string()).await?;
-        let mut stream_node_2 = TcpStream::connect(node_2_host.to_string()).await?;
+    pub async fn connect(config: ClusterConnectionConfig) {
+        for node in &config.nodes {
+            let addr = node.service_bus_address.clone();
 
-        let listener = TcpListener::bind(("0.0.0.0", own_port)).await?;
+            tokio::spawn(async move {
+                let mut stream = TcpStream::connect(addr.to_string()).await.unwrap();
+                let stream_rc = Arc::new(Mutex::new(stream));
+                
+                Self::write_frame(&stream_rc.clone(), &PingReplicationMessage::new(1212)).await;
 
-        tokio::spawn(async move {
-            loop {
-                match Self::read_frame(&mut stream_node_1).await {
-                    Ok(frame) => {
-                        println!("{:?}", frame);
-                    }
-                    Err(e) => {
-                        eprintln!("{:?}", e);
-                    }
-                }
-            }
-        });
-
-        tokio::spawn(async move {
-            loop {
-                match Self::read_frame(&mut stream_node_2).await {
-                    Ok(frame) => {
-                        println!("{:?}", frame);
-                    }
-                    Err(e) => {
-                        eprintln!("{:?}", e);
+                loop {
+                    match Self::read_frame(&mut stream).await {
+                        Ok(frame) => println!(
+                            "Replica ID {:?}",
+                            PongReplicationMessage::replica_id_from_message(&*frame)
+                        ),
+                        Err(e) => {
+                            eprintln!("read error: {:?}", e);
+                            break; // or reconnect, etc.
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
-        Ok(())
+        Ok(()).expect("TODO: panic message");
     }
 
     async fn write_frame(stream: &mut TcpStream, payload: &str) {
