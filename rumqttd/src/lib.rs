@@ -26,13 +26,14 @@ use segments::Storage;
 pub use server::{Broker, LinkType, Server};
 
 pub use self::router::shared_subs::Strategy;
+pub use cluster::cluster::{Cluster, ClusterConfig, ClusterConnectionConfig, ClusterNode, ClusterNodeMode, ClusterNodeModeConfig, ClusterNodeSettings};
 
 mod link;
 pub mod protocol;
 mod router;
 mod segments;
 mod server;
-mod cluster;
+pub mod cluster;
 
 pub type ConnectionId = usize;
 pub type RouterId = usize;
@@ -63,6 +64,7 @@ pub struct Config {
     pub bridge: Option<BridgeConfig>,
     pub prometheus: Option<PrometheusSetting>,
     pub metrics: Option<HashMap<MetricType, MetricSettings>>,
+    pub cluster: Option<ClusterConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

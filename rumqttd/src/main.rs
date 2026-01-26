@@ -1,5 +1,5 @@
 use config::FileFormat;
-use rumqttd::Broker;
+use rumqttd::{Broker, Cluster, ClusterConnectionConfig};
 
 use clap::Parser;
 use tracing::trace;
@@ -85,6 +85,16 @@ fn main() {
     validate_config(&configs);
 
     // println!("{:#?}", configs);
+
+    // Start cluster connections if configured
+    let _cluster_handles = if let Some(cluster_config) = configs.cluster.clone() {
+        let connection_config: ClusterConnectionConfig = cluster_config
+            .try_into()
+            .expect("Invalid cluster configuration");
+        Some(Cluster::connect(connection_config))
+    } else {
+        None
+    };
 
     let mut broker = Broker::new(configs);
     broker.start().unwrap();

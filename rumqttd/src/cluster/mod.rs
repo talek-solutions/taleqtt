@@ -1,2 +1,2 @@
-mod cluster;
+pub mod cluster;
 mod replication;
