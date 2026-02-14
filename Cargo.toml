@@ -1,9 +1,9 @@
 [workspace]
 members = [
-  "rumqttc",
+#  "rumqttc",
   "rumqttd",
-  "benchmarks",
-  "benchmarks/simplerouter",
+#  "benchmarks",
+#  "benchmarks/simplerouter",
 ]
 resolver = "2"
 

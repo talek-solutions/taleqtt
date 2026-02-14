@@ -86,7 +86,6 @@ fn main() {
 
     // println!("{:#?}", configs);
 
-    // Start cluster connections if configured
     let _cluster_handles = if let Some(cluster_config) = configs.cluster.clone() {
         let connection_config: ClusterConnectionConfig = cluster_config
             .try_into()
@@ -96,8 +95,12 @@ fn main() {
         None
     };
 
-    let mut broker = Broker::new(configs);
-    broker.start().unwrap();
+    loop {
+
+    }
+    //
+    // let mut broker = Broker::new(configs);
+    // broker.start().unwrap();
 }
 
 // Do any extra validation that needs to be done before starting the broker here.

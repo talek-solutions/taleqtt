@@ -26,7 +26,7 @@ use segments::Storage;
 pub use server::{Broker, LinkType, Server};
 
 pub use self::router::shared_subs::Strategy;
-pub use cluster::cluster::{Cluster, ClusterConfig, ClusterConnectionConfig, ClusterNode, ClusterNodeMode, ClusterNodeModeConfig, ClusterNodeSettings};
+pub use cluster::cluster::{Cluster, ClusterConfig, ClusterConnectionConfig, ClusterNodeMode};
 
 mod link;
 pub mod protocol;
