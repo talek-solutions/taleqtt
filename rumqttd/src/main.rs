@@ -86,14 +86,16 @@ fn main() {
 
     // println!("{:#?}", configs);
 
-    let _cluster_handles = if let Some(cluster_config) = configs.cluster.clone() {
-        let connection_config: ClusterConnectionConfig = cluster_config
-            .try_into()
-            .expect("Invalid cluster configuration");
-        Some(Cluster::connect(connection_config))
-    } else {
-        None
-    };
+    let (_cluster_handles, _cluster) =
+        if let Some(cluster_config) = configs.cluster.clone() {
+            let connection_config: ClusterConnectionConfig = cluster_config
+                .try_into()
+                .expect("Invalid cluster configuration");
+            let (handles, cluster) = Cluster::connect(connection_config);
+            (Some(handles), Some(cluster))
+        } else {
+            (None, None)
+        };
 
     loop {
 
