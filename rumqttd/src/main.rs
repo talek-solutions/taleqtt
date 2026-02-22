@@ -1,5 +1,5 @@
 use config::FileFormat;
-use rumqttd::{Broker, Cluster, ClusterConnectionConfig};
+use rumqttd::{Cluster, ClusterConnectionConfig};
 
 use clap::Parser;
 use tracing::trace;

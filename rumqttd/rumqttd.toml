@@ -36,6 +36,9 @@ name = "cluster"
 node_mode = "master"
 node_port = 1884
 nodes="node2:1885, node3:1886"
+max_missed_pings = 3
+health_check_window_secs = 60
+max_reconnect_attempts = 10
 
 #[[cluster.nodes]]
 #node_id = 1
