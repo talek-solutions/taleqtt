@@ -7,6 +7,7 @@ use std::time::SystemTime;
 const PING_MESSAGE_IDENTIFIER: &str = "PING";
 
 pub struct PingReplicationMessage {
+    #[allow(dead_code)]
     master_id: u16,
 }
 
