@@ -290,7 +290,7 @@ impl Broker {
         }
 
         if let Some(console) = self.config.console.clone() {
-            let console_link = ConsoleLink::new(console, self.router_tx.clone());
+            let console_link = ConsoleLink::new(console, self.router_tx.clone(), None);
 
             let console_link = Arc::new(console_link);
             let console_thread = thread::Builder::new().name("Console".to_string());

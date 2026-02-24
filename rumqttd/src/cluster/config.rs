@@ -17,6 +17,24 @@ pub struct ClusterConfig {
     pub node_mode: ClusterNodeMode,
     pub node_port: u16,
     pub nodes: String,
+    #[serde(default = "default_max_missed_pings")]
+    pub max_missed_pings: u32,
+    #[serde(default = "default_health_check_window_secs")]
+    pub health_check_window_secs: u64,
+    #[serde(default = "default_max_reconnect_attempts")]
+    pub max_reconnect_attempts: u32,
+}
+
+fn default_max_missed_pings() -> u32 {
+    3
+}
+
+fn default_health_check_window_secs() -> u64 {
+    60
+}
+
+fn default_max_reconnect_attempts() -> u32 {
+    10
 }
 
 /// Role of a node within the cluster.
@@ -36,6 +54,9 @@ pub struct ClusterConnectionConfig {
     pub node_mode: ClusterNodeMode,
     pub node_port: u16,
     pub nodes: Vec<String>,
+    pub max_missed_pings: u32,
+    pub health_check_window_secs: u64,
+    pub max_reconnect_attempts: u32,
 }
 
 impl TryFrom<ClusterConfig> for ClusterConnectionConfig {
@@ -57,6 +78,9 @@ impl TryFrom<ClusterConfig> for ClusterConnectionConfig {
             node_mode: config.node_mode,
             node_port: config.node_port,
             nodes,
+            max_missed_pings: config.max_missed_pings,
+            health_check_window_secs: config.health_check_window_secs,
+            max_reconnect_attempts: config.max_reconnect_attempts,
         })
     }
 }

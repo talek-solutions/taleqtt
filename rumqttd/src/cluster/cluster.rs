@@ -1,50 +1,121 @@
 //! Core cluster state and networking.
 //!
 //! [`Cluster`] manages the health state of all nodes and spawns the
-//! networking threads that maintain inter-node connections. Call
+//! networking threads that maintain internode connections. Call
 //! [`Cluster::connect`] to start the cluster layer — it returns thread
 //! handles and an `Arc<Mutex<Cluster>>` for querying cluster health
 //! via [`Cluster::info`].
 
 use crate::cluster::config::{ClusterConnectionConfig, ClusterNodeMode};
 use crate::cluster::framing::{read_frame, write_frame};
+use crate::cluster::outbound::OutboundNode;
 use crate::cluster::replication::ping::PingReplicationMessage;
 use crate::cluster::replication::pong::PongReplicationMessage;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, sleep, JoinHandle};
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::time::Instant;
+
+// ── Enums ───────────────────────────────────────────────────────────
+
+/// Health status of a single remote node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NodeStatus {
+    Connected,
+    /// Missed too many pings but still retrying.
+    Unhealthy,
+    /// Gave up reconnecting or never connected.
+    Disconnected,
+}
+
+// ── Structs ─────────────────────────────────────────────────────────
 
 /// Connection state and role of a single remote node.
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
-    pub connected: bool,
+    pub status: NodeStatus,
     /// Populated after the first successful PONG response from this node.
     pub node_mode: Option<ClusterNodeMode>,
+    pub consecutive_failures: u32,
+    #[allow(dead_code)]
+    pub last_success: Option<Instant>,
+}
+
+impl Default for NodeInfo {
+    fn default() -> Self {
+        NodeInfo {
+            status: NodeStatus::Disconnected,
+            node_mode: None,
+            consecutive_failures: 0,
+            last_success: None,
+        }
+    }
+}
+
+impl NodeInfo {
+    pub fn init_nodes(addrs: &[String]) -> HashMap<String, NodeInfo> {
+        addrs
+            .iter()
+            .map(|a| (a.clone(), NodeInfo::default()))
+            .collect()
+    }
+}
+
+/// Serializable snapshot of a single node for the console API.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeInfoSnapshot {
+    pub status: NodeStatus,
+    pub node_mode: Option<ClusterNodeMode>,
+    pub consecutive_failures: u32,
+}
+
+impl From<&NodeInfo> for NodeInfoSnapshot {
+    fn from(info: &NodeInfo) -> Self {
+        NodeInfoSnapshot {
+            status: info.status.clone(),
+            node_mode: info.node_mode.clone(),
+            consecutive_failures: info.consecutive_failures,
+        }
+    }
 }
 
 /// Snapshot of overall cluster health returned by [`Cluster::info`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClusterInfo {
     /// `true` when every configured node is connected.
     pub healthy: bool,
     /// This node's own role in the cluster.
     pub node_mode: ClusterNodeMode,
     /// Per-node connection state and role, keyed by address.
-    pub nodes: HashMap<String, NodeInfo>,
+    pub nodes: HashMap<String, NodeInfoSnapshot>,
 }
 
-const PING_INTERVAL_SECS: u64 = 15;
-const READ_TIMEOUT_SECS: u64 = 5;
-const CONNECT_RETRY_MAX: u32 = 5;
-const CONNECT_RETRY_WAIT_SECS: u64 = 5;
+// ── Cluster ─────────────────────────────────────────────────────────
 
 /// Tracks cluster node health and owns the networking threads.
 pub struct Cluster {
     node_mode: ClusterNodeMode,
+    #[allow(dead_code)]
     node_port: u16,
     nodes: HashMap<String, NodeInfo>,
+    #[allow(dead_code)]
+    max_missed_pings: u32,
+    #[allow(dead_code)]
+    max_reconnect_attempts: u32,
+}
+
+impl From<&ClusterConnectionConfig> for Cluster {
+    fn from(config: &ClusterConnectionConfig) -> Self {
+        Cluster {
+            node_mode: config.node_mode.clone(),
+            node_port: config.node_port,
+            nodes: NodeInfo::init_nodes(&config.nodes),
+            max_missed_pings: config.max_missed_pings,
+            max_reconnect_attempts: config.max_reconnect_attempts,
+        }
+    }
 }
 
 impl Cluster {
@@ -52,101 +123,26 @@ impl Cluster {
     ///
     /// Spawns a TCP listener for inbound connections and one outbound thread
     /// per configured node. Each outbound thread runs a periodic ping-pong
-    /// loop, updating the shared `Cluster` state on success or failure.
+    /// loop with retry and health tracking, updating the shared `Cluster`
+    /// state on success or failure.
     pub fn connect(config: ClusterConnectionConfig) -> (Vec<JoinHandle<()>>, Arc<Mutex<Cluster>>) {
-        let mut nodes = HashMap::new();
-        for node in &config.nodes {
-            nodes.insert(node.clone(), NodeInfo { connected: false, node_mode: None });
-        }
-
-        let cluster = Arc::new(Mutex::new(Cluster {
-            node_mode: config.node_mode.clone(),
-            node_port: config.node_port,
-            nodes,
-        }));
-
+        let cluster = Arc::new(Mutex::new(Cluster::from(&config)));
         let mut handles = Vec::new();
 
-        // Inbound: accept connections from nodes and respond to PINGs with PONGs
-        let listener_port = config.node_port;
-        let listener_node_mode = config.node_mode.clone();
-        let listener_handle = thread::spawn(move || {
-            let listener = std::net::TcpListener::bind(format!("0.0.0.0:{}", listener_port))
-                .expect("Failed to bind cluster listener");
+        handles.push(Self::spawn_listener(
+            config.node_port,
+            config.node_mode.clone(),
+        ));
 
-            for incoming in listener.incoming() {
-                match incoming {
-                    Ok(stream) => {
-                        let port = listener_port;
-                        let mode = listener_node_mode.clone();
-                        thread::spawn(move || {
-                            Self::handle_inbound(stream, port, &mode);
-                        });
-                    }
-                    Err(e) => eprintln!("Accept error: {:?}", e),
-                }
-            }
-        });
-        handles.push(listener_handle);
-
-        // Outbound: connect to each node and run ping-pong loop
-        for addr in config.nodes {
-            let cluster = Arc::clone(&cluster);
-            let node_port = config.node_port;
-
-            let handle = thread::spawn(move || {
-                let mut stream = match Self::try_connect(&addr) {
-                    Some(s) => s,
-                    None => return,
-                };
-
-                println!("Connected to {}!", addr);
-
-                loop {
-                    let ping_message = PingReplicationMessage::new(node_port);
-                    if let Err(e) = write_frame(&mut stream, &ping_message) {
-                        eprintln!("Failed to send PING to {}: {:?}", addr, e);
-                        cluster.lock().unwrap().disconnect_node(&addr);
-                        break;
-                    }
-                    println!("Sent PING to {}", addr);
-
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(READ_TIMEOUT_SECS)))
-                        .ok();
-
-                    match read_frame(&mut stream) {
-                        Ok(frame) => {
-                            match PongReplicationMessage::parse(&frame) {
-                                Ok((replica_id, node_mode)) => {
-                                    println!(
-                                        "Received PONG from {} (replica_id={}, mode={:?}), node connected",
-                                        addr, replica_id, node_mode
-                                    );
-                                    cluster.lock().unwrap().connect_node(&addr, node_mode);
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "Invalid PONG from {}: {} (frame: {})",
-                                        addr, e, frame
-                                    );
-                                    cluster.lock().unwrap().disconnect_node(&addr);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("PONG timeout/error from {}: {:?}", addr, e);
-                            cluster.lock().unwrap().disconnect_node(&addr);
-                            break;
-                        }
-                    }
-
-                    sleep(Duration::from_secs(PING_INTERVAL_SECS));
-                    println!("Cluster Info: {:?}", cluster.lock().unwrap().info());
-                }
-            });
-
-            handles.push(handle);
+        for addr in &config.nodes {
+            let node = OutboundNode::new(
+                addr.clone(),
+                config.node_port,
+                config.max_missed_pings,
+                config.max_reconnect_attempts,
+            );
+            let cluster_clone = Arc::clone(&cluster);
+            handles.push(thread::spawn(move || node.run(cluster_clone)));
         }
 
         (handles, cluster)
@@ -154,25 +150,86 @@ impl Cluster {
 
     /// Returns a snapshot of cluster health and per-node status.
     pub fn info(&self) -> ClusterInfo {
-        let healthy = self.nodes.values().all(|n| n.connected);
+        let healthy = self
+            .nodes
+            .values()
+            .all(|n| n.status == NodeStatus::Connected);
         ClusterInfo {
             healthy,
             node_mode: self.node_mode.clone(),
-            nodes: self.nodes.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into()))
+                .collect(),
         }
     }
 
-    /// Marks a node as connected and records its mode from the PONG response.
-    fn connect_node(&mut self, node: &str, mode: ClusterNodeMode) {
-        self.nodes.insert(node.to_string(), NodeInfo { connected: true, node_mode: Some(mode) });
-    }
-
-    /// Marks a node as disconnected, preserving its last known mode.
-    fn disconnect_node(&mut self, node: &str) {
+    /// Records a successful PONG: resets failure count, marks Connected.
+    pub(crate) fn record_success(&mut self, node: &str, mode: ClusterNodeMode) {
         if let Some(info) = self.nodes.get_mut(node) {
-            info.connected = false;
+            let prev_status = info.status.clone();
+            info.status = NodeStatus::Connected;
+            info.node_mode = Some(mode);
+            info.consecutive_failures = 0;
+            info.last_success = Some(Instant::now());
+
+            if prev_status != NodeStatus::Connected {
+                println!("Node {} status: {:?} -> Connected", node, prev_status);
+            }
         }
     }
+
+    /// Records a ping failure: increments counter, may transition to Unhealthy.
+    pub(crate) fn record_failure(&mut self, node: &str, max_missed_pings: u32) {
+        if let Some(info) = self.nodes.get_mut(node) {
+            info.consecutive_failures += 1;
+            let prev_status = info.status.clone();
+
+            if info.consecutive_failures >= max_missed_pings && info.status != NodeStatus::Unhealthy
+            {
+                info.status = NodeStatus::Unhealthy;
+                println!(
+                    "Node {} status: {:?} -> Unhealthy ({} consecutive failures)",
+                    node, prev_status, info.consecutive_failures
+                );
+            }
+        }
+    }
+
+    /// Explicitly sets a node's status (used for terminal Disconnected state).
+    pub(crate) fn set_node_status(&mut self, node: &str, status: NodeStatus) {
+        if let Some(info) = self.nodes.get_mut(node) {
+            let prev_status = info.status.clone();
+            info.status = status.clone();
+            if prev_status != status {
+                println!("Node {} status: {:?} -> {:?}", node, prev_status, status);
+            }
+        }
+    }
+
+    // ── Thread spawners ─────────────────────────────────────────────
+
+    /// Spawns the inbound TCP listener that accepts connections and responds
+    /// to PINGs with PONGs.
+    fn spawn_listener(port: u16, node_mode: ClusterNodeMode) -> JoinHandle<()> {
+        thread::spawn(move || {
+            let listener = std::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+                .expect("Failed to bind cluster listener");
+
+            for incoming in listener.incoming() {
+                match incoming {
+                    Ok(stream) => {
+                        let mode = node_mode.clone();
+                        thread::spawn(move || Self::handle_inbound(stream, port, &mode));
+                    }
+                    Err(e) => eprintln!("Accept error: {:?}", e),
+                }
+            }
+        })
+    }
+
+    // ── Inbound handler ─────────────────────────────────────────────
 
     /// Handles an inbound connection: reads PINGs and responds with PONGs.
     fn handle_inbound(mut stream: TcpStream, node_port: u16, node_mode: &ClusterNodeMode) {
@@ -212,32 +269,5 @@ impl Cluster {
                 }
             }
         }
-    }
-
-    /// Attempts to establish a TCP connection to a node, retrying up to
-    /// [`CONNECT_RETRY_MAX`] times with a delay between attempts.
-    fn try_connect(addr: &str) -> Option<TcpStream> {
-        for retry in 0..=CONNECT_RETRY_MAX {
-            if let Ok(stream) = TcpStream::connect(addr) {
-                return Some(stream);
-            }
-
-            if retry < CONNECT_RETRY_MAX {
-                println!(
-                    "Failed to connect to {}, retrying in {}s ({}/{})",
-                    addr,
-                    CONNECT_RETRY_WAIT_SECS,
-                    retry + 1,
-                    CONNECT_RETRY_MAX
-                );
-                sleep(Duration::from_secs(CONNECT_RETRY_WAIT_SECS));
-            }
-        }
-
-        eprintln!(
-            "Failed to connect to {} after {} retries",
-            addr, CONNECT_RETRY_MAX
-        );
-        None
     }
 }

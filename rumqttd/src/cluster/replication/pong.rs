@@ -10,6 +10,7 @@ pub struct PongReplicationMessage;
 
 impl PongReplicationMessage {
     /// Returns `true` if the given frame starts with the PONG identifier.
+    #[allow(dead_code)]
     pub fn matches(frame: &str) -> bool {
         frame.starts_with(PONG_MESSAGE_IDENTIFIER)
     }
