@@ -10,6 +10,7 @@ use crate::cluster::config::{ClusterConnectionConfig, ClusterNodeMode};
 use crate::cluster::framing::{read_frame, write_frame};
 use crate::cluster::replication::ping::PingReplicationMessage;
 use crate::cluster::replication::pong::PongReplicationMessage;
+use crate::{Broker, Config};
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
@@ -53,7 +54,7 @@ impl Cluster {
     /// Spawns a TCP listener for inbound connections and one outbound thread
     /// per configured node. Each outbound thread runs a periodic ping-pong
     /// loop, updating the shared `Cluster` state on success or failure.
-    pub fn connect(config: ClusterConnectionConfig) -> (Vec<JoinHandle<()>>, Arc<Mutex<Cluster>>) {
+    pub fn connect(config: ClusterConnectionConfig, broker_config: Config) -> (Vec<JoinHandle<()>>, Arc<Mutex<Cluster>>) {
         let mut nodes = HashMap::new();
         for node in &config.nodes {
             nodes.insert(node.clone(), NodeInfo { connected: false, node_mode: None });
@@ -149,6 +150,9 @@ impl Cluster {
             handles.push(handle);
         }
 
+        let mut broker = Broker::new(broker_config);
+        broker.start().unwrap();
+        
         (handles, cluster)
     }
 
